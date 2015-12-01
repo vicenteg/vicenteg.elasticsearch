@@ -1,0 +1,118 @@
+---
+# tasks file for elasticsearch
+
+- name: install elasticsearch yum repo key
+  sudo: yes
+  sudo_user: root
+  rpm_key: key=https://packages.elastic.co/GPG-KEY-elasticsearch state=present validate_certs=false
+  environment: proxy_env
+
+- name: install elasticsearch repo
+  sudo: yes
+  sudo_user: root
+  template: src=elasticsearch.repo.j2 dest=/etc/yum.repos.d/elasticsearch.repo owner=root group=root
+  environment: proxy_env
+
+- name: install elasticsearch
+  sudo: yes
+  sudo_user: root
+  yum: name=elasticsearch state=latest
+  environment: proxy_env
+
+- name: enable elasticsearch
+  sudo: yes
+  sudo_user: root
+  service: name=elasticsearch enabled=yes state=stopped
+
+- name: set IP to listen on
+  sudo_user: root
+  lineinfile:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    regexp: "^network.host"
+    line: "network.host: 0.0.0.0"
+    state: present
+
+- name: set elasticsearch node name
+  sudo_user: root
+  lineinfile:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    regexp: "^node.name"
+    line: "node.name: {{ansible_fqdn}}"
+    state: present
+
+- name: set elasticsearch cluster name
+  sudo_user: root
+  lineinfile:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    regexp: "^cluster.name"
+    line: "cluster.name: {{elasticsearch_cluster_name}}"
+    state: present
+
+- name: create elasticsearch data paths
+  sudo_user: root
+  file: path={{item}} state=directory owner=elasticsearch group=elasticsearch mode=0755
+  with_items: elasticsearch_data_paths
+
+- name: set elasticsearch data path (path.data)
+  sudo_user: root
+  lineinfile:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    regexp: "^path.data"
+    line: 'path.data: {% for path in elasticsearch_data_paths -%}{{ path }}{% if not loop.last %},{% endif %}{% endfor %}'
+    state: present
+
+- name: disable multicast zen ping
+  sudo_user: root
+  lineinfile:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    regexp: "^discovery.zen.ping.multicast.enabled"
+    line: "discovery.zen.ping.multicast.enabled: false"
+    state: present
+
+- name: populate zen seed list
+  sudo_user: root
+  lineinfile:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    regexp: "^discovery.zen.ping.unicast.hosts"
+    line: 'discovery.zen.ping.unicast.hosts: [{% for node in groups["elasticsearch"] -%}"{{ hostvars[node].ansible_fqdn }}"{% if not loop.last %},{% endif %}{% endfor %}]'
+    state: present
+
+- name: ensure elasticsearch user owns the data directories
+  sudo_user: root
+  file: dest={{item}} owner={{elasticsearch_user}} group={{elasticsearch_group}} mode=0755
+  with_items: elasticsearch_data_paths
+
+- name: if elasticsearch is running, stop it
+  sudo_user: root
+  service: name=elasticsearch state=stopped
+
+- name: install marvel (proxy)
+  sudo_user: root
+  command: creates=/usr/share/elasticsearch/plugins/marvel chdir=/usr/share/elasticsearch bin/plugin install -Dhttp.proxyPort={{proxy_port}} -Dhttp.proxyHost={{proxy_host}} -Dhttps.proxyPort={{proxy_port}} -Dhttps:proxyHost={{proxy_host}} elasticsearch/marvel/latest
+
+
+#- name: download the license plugin
+#  get_url: url=https://download.elastic.co/elasticsearch/release/org/elasticsearch/plugin/license/2.0.0/license-2.0.0.zip dest=/tmp validate_certs=no
+#  environment: proxy_env
+
+#- name: download marvel-agent
+#  get_url: url=https://download.elastic.co/elasticsearch/release/org/elasticsearch/plugin/marvel-agent/2.0.0/marvel-agent-2.0.0.zip dest=/tmp validate_certs=no
+#  environment: proxy_env
+
+#- name: install marvel-agent (proxy)
+#  sudo_user: root
+#  command: creates=/usr/share/elasticsearch/plugins/marvel chdir=/usr/share/elasticsearch bin/plugin install -Dhttps.proxyPort={{proxy_port}} -Dhttps:proxyHost={{proxy_host}} {{item}}
+#  with_items:
+#    - license
+#    - marvel-agent
+
+#- name: install marvel-agent (local)
+#  sudo_user: root
+#  command: creates=/usr/share/elasticsearch/plugins/marvel-agent chdir=/usr/share/elasticsearch bin/plugin install {{item}}
+#  with_items:
+#    - file:///tmp/license-2.0.0.zip
+#    - file:///tmp/marvel-agent-2.0.0.zip
+
+- name: start elasticsearch
+  sudo_user: root
+  service: name=elasticsearch state=started
